@@ -112,7 +112,12 @@ export function composeDbSchemaDoc(describe, inference, opts) {
     schema: "db-schema/v1",
     id: docIdFor(owner, table),
     keywords: [{ kw: table.toLowerCase(), inject: opts.inject ?? "pointer" }],
-    status: "active",
+    // 비활성으로 착지한다(akg #8). 조회·미리보기는 되고 주입만 안 된다 — 주입
+    // 예산이 턴당 문서 2개뿐이라, 뼈대 수백 개가 사람이 확정한 문서와 같은 2칸을
+    // 놓고 경쟁하면 안 된다. 활성화는 approver 가 문서를 보고 결정한다.
+    // (배치 라우트도 서버에서 이 값을 강제하지만, 여기서 맞춰야 dry-run 출력이
+    //  실제로 만들어질 문서와 같아진다.)
+    status: "inactive",
     body: {
       owner,
       table,

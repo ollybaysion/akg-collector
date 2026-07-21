@@ -109,16 +109,25 @@ const client = createAkgClient({
   baseUrl: "http://akg.internal",
   token: process.env.AKG_EDITOR_TOKEN,
 });
-const result = await pushDoc(client, composeDbSchemaDoc(describe, inference, opts));
-// { id, skipped: true, reason: "already_exists" } 또는 { id, skipped: false, rev }
+const result = await pushDocs(client, docs, { runId: "import-2026-07-22" });
+// { created: [...id], skipped: [...id], commits }
 ```
 
 (재개/resume 은 위 "CLI" 절 — infer 비용까지 아끼는 pre-check 는 `src/collect.mjs`.)
 
-**사람 검토 없이 문서가 바로 라이브된다.** `editor` 토큰으로 직접 생성하는 쪽을 택한
-건 이미 있는 문서를 절대 건드리지 않는다는 전제(병합 없음) 때문에 안전하다고 판단해서
-다 — 하지만 이건 akg 의 propose→adopt 거버넌스 경로를 우회하는 선택이다. 사내 반입
-전에 재확인이 필요하다.
+**적재는 주입에 닿지 않는다.** 문서는 `inactive` 로 착지한다 — akg 대시보드에서
+읽고 미리보기할 수 있지만 미러로 나가지 않아 세션에 주입되지 않는다. 주입 예산이
+턴당 문서 2개뿐이라, 뼈대 수백 개가 사람이 확정한 문서와 같은 2칸을 놓고 경쟁하면
+안 되기 때문이다. 무엇을 실제로 주입할지는 akg 에서 approver 가 문서를 보고 정한다.
+
+`akg #13` 의 배치 라우트(`POST /api/docs/:type/batch`)로 **N개를 1커밋**에 올린다.
+테이블마다 POST 하면 테이블 수만큼 커밋이 생겨 부트스트랩 한 번이 감사 로그를
+뒤덮는다. 청크는 개수가 아니라 **직렬화 크기**로 자른다(`chunkBySize`) — 컬럼 수에
+따라 문서 크기가 몇 배씩 달라서, 개수로 자르면 어떤 배치는 본문 상한을 넘고 어떤
+배치는 상한을 한참 밑돈다.
+
+배치는 전량 아니면 전무라, 이미 있는 id 가 하나라도 섞이면 그 청크는 아무것도 안
+쓰이고 409 로 그 id 들을 알려준다. `pushDocs` 는 그것들을 빼고 한 번 다시 보낸다.
 
 ### LLM 연결
 
@@ -182,6 +191,10 @@ const { inference, attempts, error } = await inferTable(describe, { client });
   그건 SQL 이 아니라 SQL 이 **돌려준다고 가정한 행**의 매핑일 뿐이다.
 - `oracledb` 실 접속은 (가짜 주소로) 끝까지 타봤다 — 6.x thin 모드라 Instant Client
   없이 붙는다는 것까지는 확인됐지만, 사내 서버로의 실제 연결·쿼리 실행은 아직이다.
-- `src/akg/client.mjs` 도 실 akg 인스턴스 응답으로 검증된 적은 없다.
-- `editor` 토큰으로 문서를 사람 검토 없이 바로 생성하는 판단(위 "akg 연결" 절)은
-  사내 반입 전 재확인이 필요하다.
+- `src/akg/client.mjs` 는 이제 실 akg 인스턴스로 검증됐다(#6). 픽스처 Oracle +
+  가짜 LLM 으로 40 테이블을 로컬 akg 서버에 실제로 올려, 커밋 1개·전량 비활성·주입
+  인덱스 빈 상태·감사에 runId·재실행 시 전량 스킵·활성화하면 인덱스 등재까지
+  확인했다. 남은 건 사내 akg 인스턴스라는 것뿐이다.
+- 재푸시는 여전히 **"이미 있으면 스킵"** 이다. 스키마가 바뀐 테이블의 팩트를 갱신하려면
+  akg 의 `PUT /api/docs/:type/:id/facts` 를 태워야 하는데, 그 갱신 시맨틱(언제 덮고
+  언제 두는가)은 아직 정하지 않았다.

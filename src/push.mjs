@@ -28,3 +28,71 @@ export async function pushDoc(client, doc) {
 
   return { id: doc.id, skipped: false, rev: result.rev };
 }
+
+// akg 의 본문 상한은 512 KiB. 여기서 400 KiB 로 자르는 건 헤드룸이다 — 직렬화
+// 오버헤드와 서버측 차이를 재현할 게 아니라, 넘지 않는 게 목적이라서.
+const CHUNK_BYTES = 400 * 1024;
+
+/**
+ * 크기로 자른다. 개수로 자르면 컬럼 수에 따라 어떤 배치는 상한을 넘고 어떤 배치는
+ * 상한을 한참 밑돈다 — akg 실측으로 12컬럼 db-schema 는 200개가 약 282 KiB 였다.
+ * 문서 하나가 혼자서도 상한을 넘으면 그건 청크로 풀 수 있는 문제가 아니므로
+ * 자기 배치로 보내 서버가 413 으로 말하게 둔다.
+ */
+export function chunkBySize(docs, limit = CHUNK_BYTES) {
+  const chunks = [];
+  let current = [];
+  let size = 2; // "[]"
+  for (const doc of docs) {
+    const bytes = Buffer.byteLength(JSON.stringify(doc)) + 1; // + 쉼표
+    if (current.length && size + bytes > limit) {
+      chunks.push(current);
+      current = [];
+      size = 2;
+    }
+    current.push(doc);
+    size += bytes;
+  }
+  if (current.length) chunks.push(current);
+  return chunks;
+}
+
+/**
+ * N개를 배치로 올린다. 청크마다 1커밋.
+ *
+ * 배치는 전량 아니면 전무라, 이미 있는 id 가 하나라도 섞이면 그 청크 전체가
+ * 409 로 아무것도 안 쓰인다. collect 단계에서 존재확인을 먼저 하므로 보통은 안
+ * 생기지만, 재실행이나 다른 프로세스와 겹치면 생긴다 — 그 id 들을 빼고 한 번
+ * 다시 보낸다. 두 번째도 409 면 남은 게 없다는 뜻이므로 스킵으로 접는다.
+ *
+ * @param {{createDocs: Function}} client
+ * @param {object[]} docs  composeDbSchemaDoc() 출력들 (전부 같은 타입)
+ * @returns {Promise<{created: string[], skipped: string[], commits: number}>}
+ */
+export async function pushDocs(client, docs, { runId } = {}) {
+  const created = [];
+  const skipped = [];
+  let commits = 0;
+  if (docs.length === 0) return { created, skipped, commits };
+
+  const [type] = docs[0].schema.split("/");
+  for (const chunk of chunkBySize(docs)) {
+    let batch = chunk;
+    for (let attempt = 0; attempt < 2 && batch.length; attempt++) {
+      const result = await client.createDocs(type, batch, { runId });
+      if (result.created) {
+        created.push(...result.created);
+        commits++;
+        break;
+      }
+      const existing = new Set(result.alreadyExists);
+      skipped.push(...batch.filter((d) => existing.has(d.id)).map((d) => d.id));
+      batch = batch.filter((d) => !existing.has(d.id));
+      // 두 번째 시도도 409 면 그 청크는 여기서 접는다: 남은 문서를 무한히
+      // 다시 보내는 것보다, 다음 실행이 스킵으로 처리하는 편이 낫다.
+      if (attempt === 1)
+        skipped.push(...batch.map((d) => d.id));
+    }
+  }
+  return { created, skipped, commits };
+}
