@@ -27,7 +27,7 @@ akg 는 **런타임 의존성 0** 이 규율이다(ajv 조차 수제 검증기).
 ② describe   테이블별 구조 (컬럼·타입·NULL·코멘트·PK·FK)
 ③ infer      LLM 추론 — 테이블 1개 = 호출 1회
 ④ compose    akg 문서 조립 (팩트 + 슬롯 + evidence)
-⑤ push       akg API — GET 으로 존재 확인, 없으면 POST. 있으면 스킵(PUT 없음)
+⑤ push       akg API — GET 으로 존재 확인, 없으면 배치로 1커밋. 있으면 스킵(PUT 없음)
 ```
 
 ③이 테이블 단위인 이유: 컬럼 의미는 그 테이블 전체를 봐야 제대로 나온다.
@@ -75,7 +75,8 @@ npx akg-collector run --owner FDC --tables-file ./bootstrap.txt --push  # 한 �
 
 ## 지금 구현된 것 (Phase 0~4, 전 단계 완료)
 
-fixture 와 주입된 가짜 fetch·DB 커넥션만으로 전부 도는 상태다 — 아직 아무 네트워크도 타지 않는다.
+테스트는 fixture 와 주입된 가짜 fetch·DB 커넥션만으로 전부 돈다 — 네트워크를 타지
+않는다. 다만 akg 쪽은 로컬에 띄운 실 akg 서버로 한 번 끝까지 태워봤다(아래 "앞으로").
 
 - `src/compose.mjs` — describe 결과 + 추론 → akg `db-schema/v1` 문서
 - `src/infer/prompt.mjs` — 추론 프롬프트 빌더
@@ -86,14 +87,14 @@ fixture 와 주입된 가짜 fetch·DB 커넥션만으로 전부 도는 상태�
 - `src/oracle/describe.mjs` — ② describe, 컬럼·PK·FK·인덱스·통계 조립
 - `src/oracle/types.mjs` — Oracle 카탈로그 타입 행 → `VARCHAR2(20)` 같은 표기
 - `src/oracle/pool.mjs` — `oracledb` 커넥션 풀 (Oracle 연결점)
-- `src/akg/client.mjs` — akg HTTP 클라이언트, GET(존재확인)·POST(생성)
-- `src/push.mjs` — ⑤ push, 존재하면 스킵 정책
+- `src/akg/client.mjs` — akg HTTP 클라이언트, GET(존재확인)·POST(생성)·배치
+- `src/push.mjs` — ⑤ push, 존재하면 스킵 정책 + 크기 기준 청크(`chunkBySize`)
 - `src/collect.mjs` — 테이블 하나 end-to-end (존재확인 → describe → infer → compose → push)
 - `src/cli.mjs` — 다섯 커맨드 오케스트레이션, 실 클라이언트는 주입받는다
 - `bin/akg-collector.mjs` — CLI 진입점, 커맨드별로 필요한 접속 정보만 요구
 
 ```bash
-npm test    # 74 단언
+npm test    # 80 단언
 ```
 
 `oracledb` 는 `package.json` 의존성으로만 선언돼 있다. `run(sql, binds)` 을 실제로
@@ -165,9 +166,9 @@ const { inference, attempts, error } = await inferTable(describe, { client });
 **추론은 언제나 `inferred`.** `confirmed` 는 사람만 만든다 — akg 서버도 이를 강제하므로
 (`applyEdit`) 수집기가 우회할 방법은 없고, 우회하려 하지도 않는다.
 
-**신규 문서의 기본 주입 강도는 `pointer`.** 부트스트랩으로 수백 개를 넣어도 한 턴에
-들어가는 건 한 줄 포인터(~20토큰)뿐이라 주입 예산을 잠식하지 않는다. `full` 승격은
-사람이 문서를 보고 결정한다.
+**신규 문서의 기본 주입 강도는 `pointer`.** 비활성 착지가 1차 방어라면 이건 2차다 —
+활성화된 뒤에도 한 턴에 들어가는 건 한 줄 포인터(~20토큰)뿐이다. `full` 승격도
+활성화와 마찬가지로 사람이 문서를 보고 결정한다.
 
 **evidence 규격.** 값이 있는 슬롯은 근거가 비면 akg 서버가 거부한다. 그래서 형식을
 고정한다 — 기계 사실 먼저, 추론 주체 마지막:
