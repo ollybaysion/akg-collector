@@ -77,7 +77,7 @@ test("추론값은 inferred 로 착지하고 evidence 규격을 지킨다", () =
   ]);
 });
 
-test("모델이 빠뜨린 컬럼은 빈칸으로 남는다", () => {
+test("모델이 빠뜨린 컬럼은 근거 없는 빈칸으로 남는다", () => {
   const doc = composeDbSchemaDoc(describe, inference(), OPTS);
   assert.deepEqual(doc.body.columnDescs.MEAS_VAL, {
     text: null,
@@ -91,105 +91,21 @@ test("환각 컬럼은 문서에 들어가지 않는다", () => {
   assert.equal(doc.body.columnDescs.CREATED_BY, undefined);
 });
 
-test("confirmed 슬롯은 절대 덮지 않는다", () => {
-  const base = {
-    schema: "db-schema/v1",
-    id: "testuser.fdc_sensor",
-    keywords: [{ kw: "fdc_sensor", inject: "full" }],
-    status: "active",
-    body: {
-      owner: "TESTUSER",
-      table: "FDC_SENSOR",
-      catalog: { columns: [], primaryKey: [], fetchedAt: "2026-01-01T00:00:00Z" },
-      purpose: {
-        text: "사람이 확정한 설명",
-        tier: "confirmed",
-        evidence: ["사람 검토"],
-      },
-      columnDescs: {
-        EQP_ID: { text: "확정된 컬럼 설명", tier: "confirmed", evidence: ["x"] },
-      },
-    },
-  };
-
-  const doc = composeDbSchemaDoc(describe, inference(), { ...OPTS, base });
-
-  assert.deepEqual(doc.body.purpose, base.body.purpose);
-  assert.deepEqual(doc.body.columnDescs.EQP_ID, base.body.columnDescs.EQP_ID);
-  // 확정 안 된 슬롯은 정상적으로 갱신된다.
-  assert.equal(doc.body.columnDescs.MEAS_TIME.tier, "inferred");
-});
-
-test("기존 문서의 keywords·status 는 보존한다", () => {
-  const base = {
-    schema: "db-schema/v1",
-    id: "testuser.fdc_sensor",
-    keywords: [{ kw: "fdc_sensor", inject: "full" }],
-    status: "archived",
-    body: {
-      owner: "TESTUSER",
-      table: "FDC_SENSOR",
-      catalog: { columns: [], primaryKey: [], fetchedAt: "2026-01-01T00:00:00Z" },
-      purpose: { text: null, tier: "scaffold" },
-      columnDescs: {},
-    },
-  };
-
-  const doc = composeDbSchemaDoc(describe, null, { ...OPTS, base });
-
-  // 재수집이 사람이 올려둔 주입 강도를 pointer 로 되돌리면 안 된다.
-  assert.deepEqual(doc.keywords, [{ kw: "fdc_sensor", inject: "full" }]);
-  assert.equal(doc.status, "archived");
-});
-
-test("사라진 컬럼: 빈칸은 삭제하고 채워진 값은 deprecated 로 보존한다", () => {
-  const base = {
-    schema: "db-schema/v1",
-    id: "testuser.fdc_sensor",
-    keywords: [{ kw: "fdc_sensor", inject: "pointer" }],
-    status: "active",
-    body: {
-      owner: "TESTUSER",
-      table: "FDC_SENSOR",
-      catalog: { columns: [], primaryKey: [], fetchedAt: "2026-01-01T00:00:00Z" },
-      purpose: { text: null, tier: "scaffold" },
-      columnDescs: {
-        GONE_EMPTY: { text: null, tier: "scaffold" },
-        GONE_FILLED: {
-          text: "없어진 컬럼의 설명",
-          tier: "confirmed",
-          evidence: ["사람 검토"],
-        },
-      },
-    },
-  };
-
-  const doc = composeDbSchemaDoc(describe, null, { ...OPTS, base });
-
-  assert.equal(doc.body.columnDescs.GONE_EMPTY, undefined);
-  assert.deepEqual(doc.body.columnDescs.GONE_FILLED, {
-    text: "없어진 컬럼의 설명",
-    tier: "deprecated",
-    evidence: ["사람 검토"],
+test("기존 문서를 병합하지 않는다 — 언제나 신규 문서 모양으로 만든다", () => {
+  // 정책: akg 에 이미 문서가 있는 테이블은 push 단계에서 통째로 스킵한다(수집 결과를
+  // 버린다). compose 는 병합을 모르며, base 같은 걸 넘겨도 무시한다.
+  const doc = composeDbSchemaDoc(describe, null, {
+    ...OPTS,
+    base: { keywords: [{ kw: "x", inject: "full" }], status: "archived" },
   });
+
+  assert.deepEqual(doc.keywords, [{ kw: "fdc_sensor", inject: "pointer" }]);
+  assert.equal(doc.status, "active");
+  assert.equal(doc.body.queries, undefined);
 });
 
-test("기존 queries 는 건드리지 않는다", () => {
-  const base = {
-    schema: "db-schema/v1",
-    id: "testuser.fdc_sensor",
-    keywords: [{ kw: "fdc_sensor", inject: "pointer" }],
-    status: "active",
-    body: {
-      owner: "TESTUSER",
-      table: "FDC_SENSOR",
-      catalog: { columns: [], primaryKey: [], fetchedAt: "2026-01-01T00:00:00Z" },
-      purpose: { text: null, tier: "scaffold" },
-      columnDescs: {},
-      queries: [{ note: { text: "대표 쿼리", tier: "confirmed", evidence: ["x"] }, sql: "SELECT 1" }],
-    },
-  };
-
-  const doc = composeDbSchemaDoc(describe, null, { ...OPTS, base });
-  assert.deepEqual(doc.body.queries, base.body.queries);
+test("describe 에 owner/table 이 없으면 거부한다", () => {
+  assert.throws(() => composeDbSchemaDoc({ columns: [] }, null, OPTS), {
+    message: /owner/,
+  });
 });

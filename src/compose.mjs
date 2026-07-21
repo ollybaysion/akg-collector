@@ -3,6 +3,10 @@
 // 이 모듈이 팩트/슬롯 경계를 집행한다: catalog 는 DB 에서 온 값을 그대로 옮기고,
 // 사람 해석의 자리(purpose·columnDescs)만 추론값으로 채운다. 추론은 언제나
 // tier "inferred" 로 착지한다 — confirmed 는 사람만 만든다(akg D4, 서버도 강제).
+//
+// **이 함수는 신규 문서만 만든다.** akg 에 이미 문서가 있는 테이블은 push 단계에서
+// 통째로 건너뛴다(수집 결과를 버린다) — 기존 문서와 병합하지 않는다. 그래서 여기에
+// 사람 작업 보존 로직이 없다: 덮어쓸 일 자체가 생기지 않는다.
 
 const CATALOG_KEYS = [
   "columns",
@@ -13,9 +17,6 @@ const CATALOG_KEYS = [
   "lastAnalyzed",
   "tableComment",
 ];
-
-/** 사람이 손댄 슬롯은 수집기가 덮지 않는다 (설계 D5). */
-const FROZEN_TIERS = new Set(["confirmed", "deprecated"]);
 
 class ComposeError extends Error {}
 
@@ -47,14 +48,13 @@ function toCatalog(describe, fetchedAt) {
 }
 
 /**
- * 추론값 하나를 슬롯으로. 기존 슬롯이 confirmed/deprecated 면 그대로 둔다.
- * 값이 없으면 scaffold(빈칸) — 억지로 채우지 않는다.
+ * 추론값 하나를 슬롯으로. 값이 없으면 scaffold(빈칸) — 억지로 채우지 않는다.
+ * evidence 는 값이 있을 때만 붙인다(빈칸에는 근거를 달지 않는다).
  */
-function mergeSlot(existing, text, evidence) {
-  if (existing && FROZEN_TIERS.has(existing.tier)) return existing;
+function slotFor(text, evidence) {
   if (typeof text === "string" && text.trim())
     return { text: text.trim(), tier: "inferred", evidence };
-  return existing ?? { text: null, tier: "scaffold" };
+  return { text: null, tier: "scaffold" };
 }
 
 /**
@@ -80,65 +80,41 @@ function purposeEvidence(describe, model) {
 }
 
 /**
- * 카탈로그에서 사라진 컬럼의 슬롯 처리 — 서버 catalog-push 와 같은 규칙
- * (server/routes/docs.mjs): 아무도 안 채운 빈칸은 삭제, 채워진 값은 폐기 표시로 보존.
- */
-function carryOrphans(columnDescs, baseDescs, knownNames) {
-  for (const [name, slot] of Object.entries(baseDescs)) {
-    if (knownNames.has(name)) continue;
-    if (slot.tier === "scaffold") continue;
-    columnDescs[name] = { ...slot, tier: "deprecated" };
-  }
-}
-
-/**
  * @param {object} describe  describe_table 출력 (owner/table/columns/…)
  * @param {object|null} inference  parseInference() 결과 — 없으면 팩트만 채운다
  * @param {object} opts
  * @param {string} opts.fetchedAt  카탈로그 조회 시각 (호출자가 준다 = 결정적 테스트)
  * @param {string} [opts.model]  추론 모델 이름 — evidence 에 남는다
  * @param {"full"|"pointer"|"none"} [opts.inject]  신규 문서의 주입 강도 (기본 pointer)
- * @param {object|null} [opts.base]  기존 akg 문서 — 있으면 사람 작업을 보존하며 병합
  */
 export function composeDbSchemaDoc(describe, inference, opts) {
   const owner = requireField(describe, "owner", "describe");
   const table = requireField(describe, "table", "describe");
   const fetchedAt = requireField(opts, "fetchedAt", "opts");
   const model = opts.model ?? "unknown";
-  const base = opts.base ?? null;
 
   const catalog = toCatalog(describe, fetchedAt);
-  const knownNames = new Set(catalog.columns.map((c) => c.name));
 
-  const baseDescs = base?.body?.columnDescs ?? {};
   const columnDescs = {};
   for (const column of catalog.columns) {
-    columnDescs[column.name] = mergeSlot(
-      baseDescs[column.name],
+    columnDescs[column.name] = slotFor(
       inference?.columns?.[column.name],
       columnEvidence(table, column, model),
     );
   }
-  carryOrphans(columnDescs, baseDescs, knownNames);
-
-  const purpose = mergeSlot(
-    base?.body?.purpose,
-    inference?.purpose,
-    purposeEvidence(describe, model),
-  );
-
-  const body = { owner, table, catalog, purpose, columnDescs };
-  // queries 는 이 수집기가 만들지 않는다 — 기존 문서에 있으면 그대로 보존한다.
-  if (base?.body?.queries) body.queries = base.body.queries;
 
   return {
     schema: "db-schema/v1",
     id: docIdFor(owner, table),
-    keywords: base?.keywords ?? [
-      { kw: table.toLowerCase(), inject: opts.inject ?? "pointer" },
-    ],
-    status: base?.status ?? "active",
-    body,
+    keywords: [{ kw: table.toLowerCase(), inject: opts.inject ?? "pointer" }],
+    status: "active",
+    body: {
+      owner,
+      table,
+      catalog,
+      purpose: slotFor(inference?.purpose, purposeEvidence(describe, model)),
+      columnDescs,
+    },
   };
 }
 
