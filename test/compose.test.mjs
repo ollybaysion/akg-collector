@@ -22,7 +22,8 @@ test("추론 없이 부르면 팩트만 있고 슬롯은 전부 빈칸이다", (
 
   assert.equal(doc.schema, "db-schema/v1");
   assert.equal(doc.id, "testuser.fdc_sensor");
-  assert.equal(doc.status, "active");
+  // 적재는 주입에 닿지 않는다(akg #8, 이 레포 #6) — 활성화는 approver 몫.
+  assert.equal(doc.status, "inactive");
   assert.deepEqual(doc.body.purpose, { text: null, tier: "scaffold" });
   for (const name of ["SNSR_ID", "EQP_ID", "MEAS_TIME", "MEAS_VAL"])
     assert.deepEqual(doc.body.columnDescs[name], {
@@ -100,7 +101,7 @@ test("기존 문서를 병합하지 않는다 — 언제나 신규 문서 모양
   });
 
   assert.deepEqual(doc.keywords, [{ kw: "fdc_sensor", inject: "pointer" }]);
-  assert.equal(doc.status, "active");
+  assert.equal(doc.status, "inactive");
   assert.equal(doc.body.queries, undefined);
 });
 

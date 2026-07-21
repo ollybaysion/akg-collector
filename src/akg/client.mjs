@@ -109,6 +109,34 @@ export function createAkgClient({
         throw new AkgApiError(`akg POST 실패: HTTP ${status}`, { status, body });
       return { alreadyExists: false, rev: body.rev, json: body.json };
     },
+
+    /**
+     * N개를 1커밋으로 (akg #13 `POST /api/docs/:type/batch`).
+     * 서버가 무엇을 보내든 비활성으로 착지시킨다.
+     *
+     * 세 가지 응답만 의미가 있다:
+     *  - 201  전부 생성됨
+     *  - 409  이미 있는 id 가 섞였다 — 배치는 전량 아니면 전무라 아무것도 안 쓰였다.
+     *         호출자가 그 id 들을 빼고 다시 부를 수 있게 목록을 돌려준다.
+     *  - 413  본문이 상한을 넘었다 — 청크를 줄여야 한다. 다시 걸어도 같은 답이므로
+     *         재시도 대상이 아니다(isRetryable 이 4xx 를 이미 걸러낸다).
+     *
+     * @returns {Promise<{created: string[]}|{alreadyExists: string[]}>}
+     */
+    async createDocs(type, docs, { runId } = {}) {
+      const { status, body } = await call("POST", `/api/docs/${type}/batch`, {
+        docs,
+        ...(runId ? { runId } : {}),
+      });
+      if (status === 201) return { created: body.created ?? [], rev: body.rev };
+      if (status === 409) return { alreadyExists: body.ids ?? [] };
+      if (status === 413)
+        throw new AkgApiError(
+          `akg 배치가 본문 상한을 넘었습니다(${docs.length}개). 청크를 줄이세요.`,
+          { status, body },
+        );
+      throw new AkgApiError(`akg 배치 실패: HTTP ${status}`, { status, body });
+    },
   };
 }
 

@@ -11,6 +11,7 @@ import { discoverTables } from "./oracle/discover.mjs";
 import { describeTable } from "./oracle/describe.mjs";
 import { inferTable } from "./infer/run.mjs";
 import { collectTable } from "./collect.mjs";
+import { pushDocs } from "./push.mjs";
 
 class CliError extends Error {
   constructor(message) {
@@ -42,6 +43,9 @@ function parseOptions(argv) {
       like: { type: "string" },
       push: { type: "boolean", default: false },
       inject: { type: "string", default: "pointer" },
+      // 배치 커밋 메시지에 실린다 — akg 감사 화면에서 어느 실행이 이 문서들을
+      // 만들었는지 보인다. 안 주면 bin 쪽이 시각으로 하나 만들어 넣는다.
+      "run-id": { type: "string" },
     },
     allowPositionals: true,
   });
@@ -146,24 +150,48 @@ export async function runCli(argv, deps) {
       ? opts.tables.split(",").map((t) => t.trim()).filter(Boolean)
       : await discoverTables(deps.oracle.run, { owner: opts.owner, like: opts.like });
 
+  // compose 를 전부 끝낸 뒤에 한꺼번에 올린다(#6). 테이블마다 POST 하면 테이블
+  // 수만큼 커밋이 생기고, 그만큼 감사 로그가 부트스트랩 한 번으로 뒤덮인다.
+  // collectTable 은 apply:false 로 부르고 push 는 여기서 배치로 한다.
   const results = [];
   for (const table of tables) {
     const result = await collectTable(deps, {
       owner: opts.owner,
       table,
-      apply: opts.push,
+      apply: false,
       inject: opts.inject,
     });
-    log(formatResult(result));
     results.push(result);
+    if (!opts.push || result.action === "skip") log(formatResult(result));
   }
 
   if (!opts.push) {
     const wouldCreate = results.filter((r) => r.action === "would_create").length;
     const skip = results.filter((r) => r.action === "skip").length;
     log(`${wouldCreate}개 생성될 예정, ${skip}개 스킵. 실제로 하려면 --push.`);
+    return { command, results };
   }
-  return { command, results };
+
+  const pending = results.filter((r) => r.action === "would_create");
+  const runId = opts["run-id"] ?? deps.runId?.();
+  const pushed = await pushDocs(
+    deps.akg,
+    pending.map((r) => r.doc),
+    { runId },
+  );
+  const createdSet = new Set(pushed.created);
+  for (const r of results) {
+    if (r.action !== "would_create") continue;
+    r.action = createdSet.has(r.id) ? "create" : "skip";
+  }
+  for (const id of pushed.created) log(`${id} → 생성됨 (비활성)`);
+  for (const id of pushed.skipped) log(`${id} → 스킵 (이미 있음)`);
+  log(
+    `${pushed.created.length}개 생성(커밋 ${pushed.commits}개), ${
+      results.filter((r) => r.action === "skip").length
+    }개 스킵. 전부 비활성 — 주입하려면 akg 대시보드에서 활성화하세요.`,
+  );
+  return { command, results, push: pushed };
 }
 
 export { CliError, COMMANDS };
