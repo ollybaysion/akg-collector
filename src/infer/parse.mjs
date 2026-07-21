@@ -4,7 +4,12 @@
 // 방어를 전담한다: 코드펜스를 벗기고, JSON 을 찾아 파싱하고, **실제 카탈로그에
 // 있는 컬럼만** 통과시킨다. 모델이 지어낸 컬럼은 조용히 통과시키지 않고 센다.
 
-class InferParseError extends Error {}
+class InferParseError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "InferParseError";
+  }
+}
 
 /** ```json … ``` 펜스 제거 후 첫 번째 JSON 객체만 남긴다. */
 function extractJson(raw) {

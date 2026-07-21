@@ -18,7 +18,12 @@ const CATALOG_KEYS = [
   "tableComment",
 ];
 
-class ComposeError extends Error {}
+class ComposeError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "ComposeError";
+  }
+}
 
 function requireField(obj, key, where) {
   const v = obj?.[key];

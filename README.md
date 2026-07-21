@@ -30,17 +30,38 @@ akg 는 **런타임 의존성 0** 이 규율이다(ajv 조차 수제 검증기).
 ③이 테이블 단위인 이유: 컬럼 의미는 그 테이블 전체를 봐야 제대로 나온다.
 `SNSR_ID` 가 무엇인지는 옆에 `EQP_ID`·`MEAS_TIME` 이 있는 걸 봐야 안다.
 
-## 지금 구현된 것 (Phase 0)
+## 지금 구현된 것 (Phase 0~1)
 
-네트워크 없이 fixture 만으로 도는 코어다.
+fixture 와 주입된 가짜 fetch 만으로 전부 도는 상태다 — 아직 아무 네트워크도 타지 않는다.
 
 - `src/compose.mjs` — describe 결과 + 추론 → akg `db-schema/v1` 문서
 - `src/infer/prompt.mjs` — 추론 프롬프트 빌더
 - `src/infer/parse.mjs` — LLM 응답 파서 + **환각 차단**
+- `src/infer/run.mjs` — 테이블 하나 추론 + **교정 재시도 루프**
+- `src/llm/openai.mjs` — OpenAI 호환 클라이언트 (사내 LLM 연결점)
 
 ```bash
-npm test    # 20 단언, 의존성 0
+npm test    # 34 단언, 의존성 0
 ```
+
+### LLM 연결
+
+OpenAI 호환 Chat Completions 엔드포인트면 붙는다. `response_format`·tool calling 같은
+확장은 **가정하지 않는다** — 배포마다 지원이 달라서다. 구조화 출력은 프롬프트와
+파서로 얻는다.
+
+```js
+const client = createOpenAiClient({
+  baseUrl: "http://llm.internal/v1",
+  apiKey: process.env.AKG_LLM_KEY, // 사내 게이트웨이가 인증을 안 걸면 생략 가능
+  model: "inhouse-llm",
+});
+const { inference, attempts, error } = await inferTable(describe, { client });
+```
+
+재시도는 두 층으로 갈라져 있다. **전송 실패**(429·5xx·네트워크)는 클라이언트가 백오프로
+다시 걸고, **형식 위반**(JSON 이 아님)은 `inferTable` 이 모델에게 무엇이 틀렸는지 알려주고
+다시 시킨다. 4xx 는 다시 걸어도 같은 답이라 즉시 포기한다.
 
 ## 설계 규율
 
@@ -76,7 +97,6 @@ npm test    # 20 단언, 의존성 0
 
 ## 앞으로
 
-- Phase 1 — LLM 클라이언트 (OpenAI 호환 API, base URL·모델 주입)
 - Phase 2 — Oracle 어댑터
 - Phase 3 — akg push + 재개(중단된 지점부터)
 - Phase 4 — CLI (`discover` / `describe` / `infer` / `push` / `run`)
