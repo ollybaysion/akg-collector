@@ -30,19 +30,28 @@ akg 는 **런타임 의존성 0** 이 규율이다(ajv 조차 수제 검증기).
 ③이 테이블 단위인 이유: 컬럼 의미는 그 테이블 전체를 봐야 제대로 나온다.
 `SNSR_ID` 가 무엇인지는 옆에 `EQP_ID`·`MEAS_TIME` 이 있는 걸 봐야 안다.
 
-## 지금 구현된 것 (Phase 0~1)
+## 지금 구현된 것 (Phase 0~2)
 
-fixture 와 주입된 가짜 fetch 만으로 전부 도는 상태다 — 아직 아무 네트워크도 타지 않는다.
+fixture 와 주입된 가짜 fetch·DB 커넥션만으로 전부 도는 상태다 — 아직 아무 네트워크도 타지 않는다.
 
 - `src/compose.mjs` — describe 결과 + 추론 → akg `db-schema/v1` 문서
 - `src/infer/prompt.mjs` — 추론 프롬프트 빌더
 - `src/infer/parse.mjs` — LLM 응답 파서 + **환각 차단**
 - `src/infer/run.mjs` — 테이블 하나 추론 + **교정 재시도 루프**
 - `src/llm/openai.mjs` — OpenAI 호환 클라이언트 (사내 LLM 연결점)
+- `src/oracle/discover.mjs` — ① discover, 스키마의 테이블 목록
+- `src/oracle/describe.mjs` — ② describe, 컬럼·PK·FK·인덱스·통계 조립
+- `src/oracle/types.mjs` — Oracle 카탈로그 타입 행 → `VARCHAR2(20)` 같은 표기
+- `src/oracle/pool.mjs` — `oracledb` 커넥션 풀 (Oracle 연결점)
 
 ```bash
-npm test    # 34 단언, 의존성 0
+npm test    # 47 단언
 ```
+
+`oracledb` 는 `package.json` 의존성으로만 선언돼 있다. `run(sql, binds)` 을 실제로
+구현하는 `pool.mjs` 만 그걸 import 하고, discover/describe 는 그 함수를 주입받는 순수
+매핑 로직이라 테스트가 걸치지 않는다 — 그래서 드라이버를 설치하지 않아도 `npm test`
+는 그대로 돈다.
 
 ### LLM 연결
 
@@ -97,8 +106,11 @@ const { inference, attempts, error } = await inferTable(describe, { client });
 
 ## 앞으로
 
-- Phase 2 — Oracle 어댑터
 - Phase 3 — akg push + 재개(중단된 지점부터)
 - Phase 4 — CLI (`discover` / `describe` / `infer` / `push` / `run`)
 
-실 DB 는 사내에서만 접근 가능하므로 로컬 검증은 fixture 로 한다.
+실 DB 는 사내에서만 접근 가능하므로 로컬 검증은 fixture 로 한다. `src/oracle/` 의 SQL
+은 사내 Oracle 19c 로 아직 라이브 검증되지 않았다 — 컬럼·PK·FK·인덱스 매핑은
+`test/oracle-describe.test.mjs` 가 기존 `fixtures/describe/fdc_sensor.json` 과 바이트
+단위로 같아지는 것으로 검증했지만, 그건 SQL 이 아니라 SQL 이 **돌려준다고 가정한 행**
+의 매핑일 뿐이다. 실 스키마에 붙는 첫 실행에서 SQL 자체를 다시 확인해야 한다.
