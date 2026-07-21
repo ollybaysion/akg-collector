@@ -24,13 +24,13 @@ akg 는 **런타임 의존성 0** 이 규율이다(ajv 조차 수제 검증기).
 ② describe   테이블별 구조 (컬럼·타입·NULL·코멘트·PK·FK)
 ③ infer      LLM 추론 — 테이블 1개 = 호출 1회
 ④ compose    akg 문서 조립 (팩트 + 슬롯 + evidence)
-⑤ push       akg API (POST 신규 / PUT 기존)
+⑤ push       akg API — GET 으로 존재 확인, 없으면 POST. 있으면 스킵(PUT 없음)
 ```
 
 ③이 테이블 단위인 이유: 컬럼 의미는 그 테이블 전체를 봐야 제대로 나온다.
 `SNSR_ID` 가 무엇인지는 옆에 `EQP_ID`·`MEAS_TIME` 이 있는 걸 봐야 안다.
 
-## 지금 구현된 것 (Phase 0~2)
+## 지금 구현된 것 (Phase 0~3)
 
 fixture 와 주입된 가짜 fetch·DB 커넥션만으로 전부 도는 상태다 — 아직 아무 네트워크도 타지 않는다.
 
@@ -43,15 +43,43 @@ fixture 와 주입된 가짜 fetch·DB 커넥션만으로 전부 도는 상태�
 - `src/oracle/describe.mjs` — ② describe, 컬럼·PK·FK·인덱스·통계 조립
 - `src/oracle/types.mjs` — Oracle 카탈로그 타입 행 → `VARCHAR2(20)` 같은 표기
 - `src/oracle/pool.mjs` — `oracledb` 커넥션 풀 (Oracle 연결점)
+- `src/akg/client.mjs` — akg HTTP 클라이언트, GET(존재확인)·POST(생성)
+- `src/push.mjs` — ⑤ push, 존재하면 스킵 정책
 
 ```bash
-npm test    # 47 단언
+npm test    # 58 단언
 ```
 
 `oracledb` 는 `package.json` 의존성으로만 선언돼 있다. `run(sql, binds)` 을 실제로
 구현하는 `pool.mjs` 만 그걸 import 하고, discover/describe 는 그 함수를 주입받는 순수
 매핑 로직이라 테스트가 걸치지 않는다 — 그래서 드라이버를 설치하지 않아도 `npm test`
 는 그대로 돈다.
+
+### akg 연결
+
+`editor` 역할 Bearer 토큰 하나로 존재확인(GET)·생성(POST) 둘 다 커버한다 — akg 의
+role 랭크가 `viewer < editor < approver` 라서다(`agent` 는 이 사다리 밖 별도 역할이라
+GET 도 POST 도 못 한다). 토큰은 akg 서버의 `akg-user.mjs add <id> editor` 로 발급한다.
+
+```js
+const client = createAkgClient({
+  baseUrl: "http://akg.internal",
+  token: process.env.AKG_EDITOR_TOKEN,
+});
+const result = await pushDoc(client, composeDbSchemaDoc(describe, inference, opts));
+// { id, skipped: true, reason: "already_exists" } 또는 { id, skipped: false, rev }
+```
+
+**재개(resume)는 이 스킵 정책 자체다.** 파이프라인을 처음부터 다시 돌려도 이미 push
+된 테이블은 그대로 스킵된다 — 다만 그건 describe·infer 까지 다시 하고서야 걸러진다는
+뜻이다. infer 호출(비용)까지 건너뛰려면 호출자가 push 전에 `docIdFor(owner, table)`
+로 미리 `client.getDoc` 을 불러 스킵 여부를 먼저 볼 수 있다 — 그 wiring 은 Phase 4
+CLI 오케스트레이터의 몫이다.
+
+**사람 검토 없이 문서가 바로 라이브된다.** `editor` 토큰으로 직접 생성하는 쪽을 택한
+건 이미 있는 문서를 절대 건드리지 않는다는 전제(병합 없음) 때문에 안전하다고 판단해서
+다 — 하지만 이건 akg 의 propose→adopt 거버넌스 경로를 우회하는 선택이다. 사내 반입
+전에 재확인이 필요하다.
 
 ### LLM 연결
 
@@ -106,8 +134,8 @@ const { inference, attempts, error } = await inferTable(describe, { client });
 
 ## 앞으로
 
-- Phase 3 — akg push + 재개(중단된 지점부터)
-- Phase 4 — CLI (`discover` / `describe` / `infer` / `push` / `run`)
+- Phase 4 — CLI (`discover` / `describe` / `infer` / `push` / `run`). `run` 이
+  push 전 `getDoc` 으로 미리 스킵을 걸러 infer 비용을 아끼는 wiring 을 여기서 한다.
 
 실 DB 는 사내에서만 접근 가능하므로 로컬 검증은 fixture 로 한다. `src/oracle/` 의 SQL
 은 사내 Oracle 19c 로 아직 라이브 검증되지 않았다 — 컬럼·PK·FK·인덱스 매핑은
