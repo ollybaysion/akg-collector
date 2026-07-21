@@ -11,6 +11,9 @@ Oracle 스키마를 읽어 [agent-knowledge-governance](https://github.com/ollyb
 | LLM 추론 (테이블 용도·컬럼 의미) | `purpose` · `columnDescs` | `inferred` |
 | 사람 확인 | 같은 슬롯 | `confirmed` — akg 서버에서 승격 |
 
+**문서:** [docs/usage.html](docs/usage.html) (커맨드 레퍼런스) ·
+[docs/onprem-verification.html](docs/onprem-verification.html) (사내 반입 전 검증 체크리스트)
+
 ## 왜 별도 레포인가
 
 akg 는 **런타임 의존성 0** 이 규율이다(ajv 조차 수제 검증기). Oracle 드라이버와 LLM
