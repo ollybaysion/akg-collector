@@ -1,0 +1,13 @@
+{
+  "name": "akg-collector",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Oracle 스키마를 읽어 agent-knowledge-governance 의 db-schema 문서를 만드는 수집기",
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

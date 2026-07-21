@@ -1,0 +1,52 @@
+{
+  "owner": "TESTUSER",
+  "table": "FDC_SENSOR",
+  "columns": [
+    {
+      "name": "SNSR_ID",
+      "type": "VARCHAR2(20)",
+      "nullable": false,
+      "default": null,
+      "comment": "센서 식별자"
+    },
+    {
+      "name": "EQP_ID",
+      "type": "VARCHAR2(20)",
+      "nullable": false,
+      "default": null,
+      "comment": null
+    },
+    {
+      "name": "MEAS_TIME",
+      "type": "DATE",
+      "nullable": false,
+      "default": null,
+      "comment": null
+    },
+    {
+      "name": "MEAS_VAL",
+      "type": "NUMBER(18,6)",
+      "nullable": true,
+      "default": null,
+      "comment": null
+    }
+  ],
+  "primaryKey": ["SNSR_ID", "MEAS_TIME"],
+  "foreignKeys": [
+    {
+      "column": "EQP_ID",
+      "refTable": "FDC_EQUIPMENT",
+      "refColumn": "EQP_ID"
+    }
+  ],
+  "indexes": [
+    {
+      "name": "IX_FDC_SENSOR_EQP",
+      "unique": false,
+      "columns": ["EQP_ID", "MEAS_TIME"]
+    }
+  ],
+  "numRows": 128374,
+  "lastAnalyzed": "2026-07-20T00:00:00Z",
+  "tableComment": "설비 센서 계측 이력"
+}
