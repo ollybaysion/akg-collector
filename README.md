@@ -30,7 +30,47 @@ akg 는 **런타임 의존성 0** 이 규율이다(ajv 조차 수제 검증기).
 ③이 테이블 단위인 이유: 컬럼 의미는 그 테이블 전체를 봐야 제대로 나온다.
 `SNSR_ID` 가 무엇인지는 옆에 `EQP_ID`·`MEAS_TIME` 이 있는 걸 봐야 안다.
 
-## 지금 구현된 것 (Phase 0~3)
+## CLI
+
+```bash
+npm install   # oracledb 는 6.x thin 모드라 Oracle Instant Client 설치 없이도 붙는다
+              # (127.0.0.1:1521 로 실제 접속 시도까지 로컬에서 검증됨 — 연결 자체는
+              # 당연히 사내에서만 성공한다)
+
+# discover·describe 는 Oracle 접속 정보만 있으면 된다
+export ORACLE_USER=... ORACLE_PASSWORD=... ORACLE_CONNECT_STRING=host:1521/service
+npx akg-collector discover --owner FDC
+npx akg-collector describe --owner FDC --table FDC_SENSOR
+
+# infer 는 LLM 접속 정보도 필요
+export AKG_LLM_URL=http://llm.internal/v1 AKG_LLM_KEY=...   # 사내 게이트웨이가 인증 안 걸면 KEY 생략
+npx akg-collector infer --owner FDC --table FDC_SENSOR
+
+# push·run 은 akg 접속 정보도 필요. 기본은 dry-run — 실제로 만들려면 --push
+export AKG_BASE_URL=http://akg.internal AKG_EDITOR_TOKEN=...
+npx akg-collector push --owner FDC --table FDC_SENSOR           # dry-run
+npx akg-collector push --owner FDC --table FDC_SENSOR --push    # 실제 생성
+
+# run 은 discover 로 스키마 전체를 훑거나, 테이블을 직접 지정한다
+npx akg-collector run --owner FDC --push                        # 스키마 전체
+npx akg-collector run --owner FDC --tables FDC_SENSOR,FDC_EQUIPMENT --push
+npx akg-collector run --owner FDC --tables-file ./bootstrap.txt --push  # 한 줄에 테이블 하나, # 주석 허용
+```
+
+커맨드가 실제로 안 쓰는 접속 정보는 요구하지 않는다 — `discover`/`describe`는 Oracle
+뿐이고, `infer`는 LLM 이 더 필요하고, `push`/`run`은 akg 까지 필요하다
+(`bin/akg-collector.mjs`).
+
+`run --tables`/`--tables-file` 은 discover 를 건너뛴다 — 스키마 안의 테이블을 전부
+훑고 싶지 않을 때(부트스트랩 대상을 미리 골라둔 경우 등) 쓴다. `--tables-file` 은
+`--tables` 로 감당하기 부담스러운 수백 줄짜리 목록을 위한 것이다.
+
+**`run`/`push` 의 재개(resume)는 스킵 정책 자체다** — akg 에 이미 문서가 있는
+테이블은 describe·infer 도 하기 전에 걸러진다(`src/collect.mjs`). 파이프라인을
+중단된 지점부터 다시 시작한다는 개념의 별도 상태 파일은 없다: 처음부터 다시 돌려도
+결과가 같다.
+
+## 지금 구현된 것 (Phase 0~4, 전 단계 완료)
 
 fixture 와 주입된 가짜 fetch·DB 커넥션만으로 전부 도는 상태다 — 아직 아무 네트워크도 타지 않는다.
 
@@ -45,9 +85,12 @@ fixture 와 주입된 가짜 fetch·DB 커넥션만으로 전부 도는 상태�
 - `src/oracle/pool.mjs` — `oracledb` 커넥션 풀 (Oracle 연결점)
 - `src/akg/client.mjs` — akg HTTP 클라이언트, GET(존재확인)·POST(생성)
 - `src/push.mjs` — ⑤ push, 존재하면 스킵 정책
+- `src/collect.mjs` — 테이블 하나 end-to-end (존재확인 → describe → infer → compose → push)
+- `src/cli.mjs` — 다섯 커맨드 오케스트레이션, 실 클라이언트는 주입받는다
+- `bin/akg-collector.mjs` — CLI 진입점, 커맨드별로 필요한 접속 정보만 요구
 
 ```bash
-npm test    # 58 단언
+npm test    # 74 단언
 ```
 
 `oracledb` 는 `package.json` 의존성으로만 선언돼 있다. `run(sql, binds)` 을 실제로
@@ -70,11 +113,7 @@ const result = await pushDoc(client, composeDbSchemaDoc(describe, inference, opt
 // { id, skipped: true, reason: "already_exists" } 또는 { id, skipped: false, rev }
 ```
 
-**재개(resume)는 이 스킵 정책 자체다.** 파이프라인을 처음부터 다시 돌려도 이미 push
-된 테이블은 그대로 스킵된다 — 다만 그건 describe·infer 까지 다시 하고서야 걸러진다는
-뜻이다. infer 호출(비용)까지 건너뛰려면 호출자가 push 전에 `docIdFor(owner, table)`
-로 미리 `client.getDoc` 을 불러 스킵 여부를 먼저 볼 수 있다 — 그 wiring 은 Phase 4
-CLI 오케스트레이터의 몫이다.
+(재개/resume 은 위 "CLI" 절 — infer 비용까지 아끼는 pre-check 는 `src/collect.mjs`.)
 
 **사람 검토 없이 문서가 바로 라이브된다.** `editor` 토큰으로 직접 생성하는 쪽을 택한
 건 이미 있는 문서를 절대 건드리지 않는다는 전제(병합 없음) 때문에 안전하다고 판단해서
@@ -132,13 +171,17 @@ const { inference, attempts, error } = await inferTable(describe, { client });
 **샘플 데이터는 기본 OFF.** 실제 값 몇 행을 보여주면 추론 정확도가 오르지만
 개인정보·영업기밀이 LLM 으로 나간다. 온프렘 LLM 일 때만 명시적으로 켠다.
 
-## 앞으로
+## 앞으로 — 사내 반입 전 남은 것
 
-- Phase 4 — CLI (`discover` / `describe` / `infer` / `push` / `run`). `run` 이
-  push 전 `getDoc` 으로 미리 스킵을 걸러 infer 비용을 아끼는 wiring 을 여기서 한다.
+파이프라인 다섯 단계(discover~push)와 CLI 는 다 구현됐다. 로컬에서 못 끝낸 건 실
+네트워크·DB 가 필요한 부분뿐이다:
 
-실 DB 는 사내에서만 접근 가능하므로 로컬 검증은 fixture 로 한다. `src/oracle/` 의 SQL
-은 사내 Oracle 19c 로 아직 라이브 검증되지 않았다 — 컬럼·PK·FK·인덱스 매핑은
-`test/oracle-describe.test.mjs` 가 기존 `fixtures/describe/fdc_sensor.json` 과 바이트
-단위로 같아지는 것으로 검증했지만, 그건 SQL 이 아니라 SQL 이 **돌려준다고 가정한 행**
-의 매핑일 뿐이다. 실 스키마에 붙는 첫 실행에서 SQL 자체를 다시 확인해야 한다.
+- `src/oracle/` 의 SQL 은 사내 Oracle 19c 로 아직 라이브 검증되지 않았다 — 컬럼·PK·
+  FK·인덱스 매핑은 `test/oracle-describe.test.mjs` 가 기존
+  `fixtures/describe/fdc_sensor.json` 과 바이트 단위로 같아지는 것으로 검증했지만,
+  그건 SQL 이 아니라 SQL 이 **돌려준다고 가정한 행**의 매핑일 뿐이다.
+- `oracledb` 실 접속은 (가짜 주소로) 끝까지 타봤다 — 6.x thin 모드라 Instant Client
+  없이 붙는다는 것까지는 확인됐지만, 사내 서버로의 실제 연결·쿼리 실행은 아직이다.
+- `src/akg/client.mjs` 도 실 akg 인스턴스 응답으로 검증된 적은 없다.
+- `editor` 토큰으로 문서를 사람 검토 없이 바로 생성하는 판단(위 "akg 연결" 절)은
+  사내 반입 전 재확인이 필요하다.
