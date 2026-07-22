@@ -21,7 +21,7 @@ test("추론 없이 부르면 팩트만 있고 슬롯은 전부 빈칸이다", (
   const doc = composeDbSchemaDoc(describe, null, OPTS);
 
   assert.equal(doc.schema, "db-schema/v1");
-  assert.equal(doc.id, "testuser.fdc_sensor");
+  assert.equal(doc.id, "fdc_sensor");
   // 적재는 주입에 닿지 않는다(akg #8, 이 레포 #6) — 활성화는 approver 몫.
   assert.equal(doc.status, "inactive");
   assert.deepEqual(doc.body.purpose, { text: null, tier: "scaffold" });
@@ -37,8 +37,8 @@ test("신규 문서의 기본 주입 강도는 pointer 다", () => {
   assert.deepEqual(doc.keywords, [{ kw: "fdc_sensor", inject: "pointer" }]);
 });
 
-test("id 는 lower(owner.table) 이다", () => {
-  assert.equal(docIdFor("TESTUSER", "FDC_SENSOR"), "testuser.fdc_sensor");
+test("id 는 lower(table) 이다 — owner 는 id 를 한정하지 않는다", () => {
+  assert.equal(docIdFor("FDC_SENSOR"), "fdc_sensor");
 });
 
 test("카탈로그는 describe 를 그대로 옮기되 모르는 키는 버린다", () => {

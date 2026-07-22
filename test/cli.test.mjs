@@ -117,7 +117,7 @@ test("push: --push 주면 실제로 생성한다", async () => {
 test("run: --owner 만 주면 discover 로 스키마 전체를 훑는다", async () => {
   const deps = fakeDeps({
     tables: ["T1", "T2"],
-    existing: { "testuser.t2": { id: "testuser.t2" } },
+    existing: { "t2": { id: "t2" } },
   });
   const out = await runCli(["run", "--owner", "TESTUSER"], deps);
 
@@ -133,7 +133,7 @@ test("run: --tables 를 주면 discover 를 건너뛰고 그 테이블만 돈다
 
   assert.deepEqual(
     out.results.map((r) => r.id),
-    ["testuser.t1", "testuser.t2"],
+    ["t1", "t2"],
   );
 });
 
@@ -147,7 +147,7 @@ test("run: --tables-file 로 파일에서 테이블 목록을 읽는다 (# 주�
     const out = await runCli(["run", "--owner", "TESTUSER", "--tables-file", file], deps);
     assert.deepEqual(
       out.results.map((r) => r.id),
-      ["testuser.t1", "testuser.t2"],
+      ["t1", "t2"],
     );
   } finally {
     rmSync(dir, { recursive: true, force: true });

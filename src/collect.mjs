@@ -26,7 +26,7 @@ import { pushDoc } from "./push.mjs";
  */
 export async function collectTable(deps, opts) {
   const { owner, table, apply, inject } = opts;
-  const id = docIdFor(owner, table);
+  const id = docIdFor(table);
 
   const existing = await deps.akg.getDoc("db-schema", id);
   if (existing) return { id, action: "skip" };

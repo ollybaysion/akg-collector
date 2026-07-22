@@ -69,14 +69,14 @@ const fetchedAt = () => "2026-07-21T15:00:00Z";
 test("이미 있으면 describe·infer 까지 건너뛰고 스킵한다", async () => {
   const oracle = fakeOracle();
   const llm = fakeLlm();
-  const akg = fakeAkg({ existing: { id: "testuser.t" } });
+  const akg = fakeAkg({ existing: { id: "t" } });
 
   const out = await collectTable(
     { oracle, llm, akg, fetchedAt },
     { owner: "TESTUSER", table: "T", apply: true },
   );
 
-  assert.deepEqual(out, { id: "testuser.t", action: "skip" });
+  assert.deepEqual(out, { id: "t", action: "skip" });
   assert.equal(oracle.calls.length, 0, "describe 를 아예 안 불러야 한다");
   assert.equal(llm.calls, 0, "infer 도 안 불러야 한다");
 });
@@ -92,7 +92,7 @@ test("apply=false 면 문서를 조립만 하고 push 하지 않는다", async (
   );
 
   assert.equal(out.action, "would_create");
-  assert.equal(out.doc.id, "testuser.t");
+  assert.equal(out.doc.id, "t");
   assert.equal(out.doc.body.columnDescs.ID.text, "식별자");
   assert.deepEqual(
     akg.calls.map((c) => c.op),
@@ -111,5 +111,5 @@ test("apply=true 면 push 까지 한다", async () => {
     { owner: "TESTUSER", table: "T", apply: true },
   );
 
-  assert.deepEqual(out, { id: "testuser.t", action: "create", rev: "r7" });
+  assert.deepEqual(out, { id: "t", action: "create", rev: "r7" });
 });
