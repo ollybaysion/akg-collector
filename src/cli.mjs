@@ -42,6 +42,9 @@ function parseOptions(argv) {
       "tables-file": { type: "string" }, // 한 줄에 테이블 하나, # 로 시작하면 주석
       like: { type: "string" },
       push: { type: "boolean", default: false },
+      // 기존 문서를 스킵 대신 팩트 갱신(akg PUT /facts)한다. 슬롯 보존은 서버
+      // mergeFacts 책임이고, 이 경로엔 LLM 호출이 없다(#10).
+      "refresh-facts": { type: "boolean", default: false },
       inject: { type: "string", default: "pointer" },
       // 배치 커밋 메시지에 실린다 — akg 감사 화면에서 어느 실행이 이 문서들을
       // 만들었는지 보인다. 안 주면 bin 쪽이 시각으로 하나 만들어 넣는다.
@@ -78,6 +81,12 @@ function readTableListFile(path) {
 function formatResult(result) {
   if (result.action === "skip") return `${result.id} → 스킵 (이미 있음)`;
   if (result.action === "would_create") return `(dry-run) ${result.id} → 생성될 예정`;
+  if (result.action === "would_refresh")
+    return `(dry-run) ${result.id} → 팩트 갱신될 예정 (기존 문서)`;
+  if (result.action === "refresh")
+    return `${result.id} → 팩트 갱신됨 (rev ${result.rev}${
+      result.orphans?.length ? `, 고아 슬롯 ${result.orphans.length}개` : ""
+    })`;
   return `${result.id} → 생성됨 (rev ${result.rev})`;
 }
 
@@ -86,7 +95,7 @@ function formatResult(result) {
  * @param {object} deps
  * @param {{run: Function}} [deps.oracle]
  * @param {{complete: Function, model: string}} [deps.llm]
- * @param {{getDoc: Function, createDoc: Function}} [deps.akg]
+ * @param {{getDoc: Function, createDoc: Function, putFacts: Function}} [deps.akg]
  * @param {() => string} [deps.fetchedAt]  ISO 문자열 — 호출자가 준다(결정적 테스트)
  * @param {(line: string) => void} [deps.log]
  * @returns {Promise<object>}  커맨드별 결과(테스트용) — log 는 사람이 보는 출력
@@ -132,6 +141,7 @@ export async function runCli(argv, deps) {
       owner: opts.owner,
       table: opts.table,
       apply: opts.push,
+      refreshFacts: opts["refresh-facts"],
       inject: opts.inject,
     });
     log(formatResult(result));
@@ -159,6 +169,7 @@ export async function runCli(argv, deps) {
       owner: opts.owner,
       table,
       apply: false,
+      refreshFacts: opts["refresh-facts"],
       inject: opts.inject,
     });
     results.push(result);
@@ -167,9 +178,26 @@ export async function runCli(argv, deps) {
 
   if (!opts.push) {
     const wouldCreate = results.filter((r) => r.action === "would_create").length;
+    const wouldRefresh = results.filter((r) => r.action === "would_refresh").length;
     const skip = results.filter((r) => r.action === "skip").length;
-    log(`${wouldCreate}개 생성될 예정, ${skip}개 스킵. 실제로 하려면 --push.`);
+    log(
+      `${wouldCreate}개 생성될 예정${
+        wouldRefresh ? `, ${wouldRefresh}개 팩트 갱신될 예정` : ""
+      }, ${skip}개 스킵. 실제로 하려면 --push.`,
+    );
     return { command, results };
+  }
+
+  // 팩트 갱신은 문서별 PUT — 배치 facts 엔드포인트가 없다. 신규 배치와 달리
+  // 커밋이 문서 수만큼 생기지만, 부트스트랩에서 기존 문서는 소수라는 전제다.
+  for (const r of results) {
+    if (r.action !== "would_refresh") continue;
+    const put = await deps.akg.putFacts("db-schema", r.id, r.doc);
+    r.action = "refresh";
+    r.rev = put.rev;
+    r.orphans = put.orphans;
+    delete r.doc;
+    log(formatResult(r));
   }
 
   const pending = results.filter((r) => r.action === "would_create");
@@ -186,10 +214,13 @@ export async function runCli(argv, deps) {
   }
   for (const id of pushed.created) log(`${id} → 생성됨 (비활성)`);
   for (const id of pushed.skipped) log(`${id} → 스킵 (이미 있음)`);
+  const refreshed = results.filter((r) => r.action === "refresh").length;
   log(
-    `${pushed.created.length}개 생성(커밋 ${pushed.commits}개), ${
+    `${pushed.created.length}개 생성(커밋 ${pushed.commits}개)${
+      refreshed ? `, ${refreshed}개 팩트 갱신` : ""
+    }, ${
       results.filter((r) => r.action === "skip").length
-    }개 스킵. 전부 비활성 — 주입하려면 akg 대시보드에서 활성화하세요.`,
+    }개 스킵. 신규는 전부 비활성 — 주입하려면 akg 대시보드에서 활성화하세요.`,
   );
   return { command, results, push: pushed };
 }

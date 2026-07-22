@@ -71,6 +71,41 @@ test("createDoc: 409 면 alreadyExists — 재시도하지 않는다", async () 
   assert.equal(f.calls.length, 1);
 });
 
+test("putFacts: 200 이면 rev·orphans 를 돌려준다 — body 만 보낸다", async () => {
+  const f = fakeFetch([
+    ok(200, { rev: "r2", orphans: [{ address: "columnDescs.OLD", outcome: "deprecated" }] }),
+  ]);
+  const doc = { schema: "db-schema/v1", id: "t1", body: { table: "T1" } };
+  const out = await client(f).putFacts("db-schema", "t1", doc);
+
+  assert.deepEqual(out, {
+    created: false,
+    rev: "r2",
+    orphans: [{ address: "columnDescs.OLD", outcome: "deprecated" }],
+  });
+  const [call] = f.calls;
+  assert.equal(call.url, "http://akg.internal/api/docs/db-schema/t1/facts");
+  assert.equal(call.init.method, "PUT");
+  // 서버는 body 만 본다 — envelope(schema/id/status)를 통째로 보내지 않는다.
+  assert.deepEqual(JSON.parse(call.init.body), { body: { table: "T1" } });
+});
+
+test("putFacts: 201 이면 created — 문서가 없어서 새로 생겼다(서버가 비활성 착지)", async () => {
+  const f = fakeFetch([ok(201, { rev: "r1", orphans: [] })]);
+  const out = await client(f).putFacts("db-schema", "t1", { body: {} });
+
+  assert.deepEqual(out, { created: true, rev: "r1", orphans: [] });
+});
+
+test("putFacts: 400(validation) 은 재시도 없이 던진다", async () => {
+  const f = fakeFetch([ok(400, { error: "validation_failed" })]);
+  await assert.rejects(
+    () => client(f).putFacts("db-schema", "t1", { body: {} }),
+    { name: "AkgApiError", status: 400 },
+  );
+  assert.equal(f.calls.length, 1);
+});
+
 test("500 은 다시 걸어보고, 성공하면 그 결과를 쓴다", async () => {
   const f = fakeFetch([ok(500, {}), ok(200, { json: { id: "x.y" } })]);
   const doc = await client(f).getDoc("db-schema", "x.y");

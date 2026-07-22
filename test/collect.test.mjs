@@ -49,7 +49,7 @@ function fakeLlm() {
   };
 }
 
-function fakeAkg({ existing = null, createResult } = {}) {
+function fakeAkg({ existing = null, createResult, putFactsResult } = {}) {
   const calls = [];
   return {
     calls,
@@ -60,6 +60,10 @@ function fakeAkg({ existing = null, createResult } = {}) {
     async createDoc(type, doc) {
       calls.push({ op: "createDoc", type, doc });
       return createResult ?? { alreadyExists: false, rev: "r1" };
+    },
+    async putFacts(type, id, doc) {
+      calls.push({ op: "putFacts", type, id, doc });
+      return putFactsResult ?? { created: false, rev: "r2", orphans: [] };
     },
   };
 }
@@ -98,6 +102,77 @@ test("apply=false 면 문서를 조립만 하고 push 하지 않는다", async (
     akg.calls.map((c) => c.op),
     ["getDoc"],
     "createDoc 은 불리면 안 된다",
+  );
+});
+
+test("refreshFacts: 기존 문서면 describe 만 돌려 putFacts — infer 는 안 부른다", async () => {
+  const oracle = fakeOracle();
+  const llm = fakeLlm();
+  const akg = fakeAkg({
+    existing: { id: "t" },
+    putFactsResult: {
+      created: false,
+      rev: "r9",
+      orphans: [{ address: "columnDescs.OLD", outcome: "deprecated" }],
+    },
+  });
+
+  const out = await collectTable(
+    { oracle, llm, akg, fetchedAt },
+    { owner: "TESTUSER", table: "T", apply: true, refreshFacts: true },
+  );
+
+  assert.deepEqual(out, {
+    id: "t",
+    action: "refresh",
+    rev: "r9",
+    orphans: [{ address: "columnDescs.OLD", outcome: "deprecated" }],
+  });
+  assert.ok(oracle.calls.length > 0, "describe 는 다시 돌아야 한다");
+  assert.equal(llm.calls, 0, "infer 는 안 불러야 한다 — 슬롯은 이 경로로 못 쓴다");
+  const put = akg.calls.find((c) => c.op === "putFacts");
+  assert.equal(put.id, "t");
+  assert.equal(put.doc.body.table, "T");
+});
+
+test("refreshFacts + apply=false: would_refresh 로 문서만 돌려준다", async () => {
+  const oracle = fakeOracle();
+  const llm = fakeLlm();
+  const akg = fakeAkg({ existing: { id: "t" } });
+
+  const out = await collectTable(
+    { oracle, llm, akg, fetchedAt },
+    { owner: "TESTUSER", table: "T", apply: false, refreshFacts: true },
+  );
+
+  assert.equal(out.action, "would_refresh");
+  assert.equal(out.doc.id, "t");
+  // 팩트만 있고 슬롯은 전부 빈칸 — 서버가 리셋할 값을 만들지도 않는다.
+  assert.deepEqual(out.doc.body.columnDescs.ID, { text: null, tier: "scaffold" });
+  assert.deepEqual(
+    akg.calls.map((c) => c.op),
+    ["getDoc"],
+    "putFacts 는 불리면 안 된다",
+  );
+  assert.equal(llm.calls, 0);
+});
+
+test("refreshFacts: 문서가 없으면 평소처럼 생성 경로를 탄다", async () => {
+  const oracle = fakeOracle();
+  const llm = fakeLlm();
+  const akg = fakeAkg({ existing: null, createResult: { alreadyExists: false, rev: "r7" } });
+
+  const out = await collectTable(
+    { oracle, llm, akg, fetchedAt },
+    { owner: "TESTUSER", table: "T", apply: true, refreshFacts: true },
+  );
+
+  assert.deepEqual(out, { id: "t", action: "create", rev: "r7" });
+  assert.equal(llm.calls, 1, "신규 생성이면 infer 를 탄다");
+  assert.equal(
+    akg.calls.filter((c) => c.op === "putFacts").length,
+    0,
+    "신규는 putFacts 가 아니라 createDoc 경로다",
   );
 });
 
