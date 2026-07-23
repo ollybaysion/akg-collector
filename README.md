@@ -27,7 +27,8 @@ akg 는 **런타임 의존성 0** 이 규율이다(ajv 조차 수제 검증기).
 ② describe   테이블별 구조 (컬럼·타입·NULL·코멘트·PK·FK)
 ③ infer      LLM 추론 — 테이블 1개 = 호출 1회
 ④ compose    akg 문서 조립 (팩트 + 슬롯 + evidence)
-⑤ push       akg API — GET 으로 존재 확인, 없으면 배치로 1커밋. 있으면 스킵(PUT 없음)
+⑤ push       akg API — GET 으로 존재 확인, 없으면 배치로 1커밋. 있으면 스킵
+             (--refresh-facts 를 주면 스킵 대신 PUT /facts 로 팩트만 갱신 — 슬롯은 서버가 보존)
 ```
 
 ③이 테이블 단위인 이유: 컬럼 의미는 그 테이블 전체를 봐야 제대로 나온다.
@@ -58,6 +59,9 @@ npx akg-collector push --owner FDC --table FDC_SENSOR --push    # 실제 생성
 npx akg-collector run --owner FDC --push                        # 스키마 전체
 npx akg-collector run --owner FDC --tables FDC_SENSOR,FDC_EQUIPMENT --push
 npx akg-collector run --owner FDC --tables-file ./bootstrap.txt --push  # 한 줄에 테이블 하나, # 주석 허용
+
+# 기존 문서는 기본 스킵. 팩트(컬럼·PK·FK 등)가 낡았거나 빈 문서를 채우려면 --refresh-facts
+npx akg-collector run --owner FDC --refresh-facts --push        # 기존 문서 = 팩트만 갱신(LLM 호출 없음)
 ```
 
 커맨드가 실제로 안 쓰는 접속 정보는 요구하지 않는다 — `discover`/`describe`는 Oracle
@@ -72,6 +76,14 @@ npx akg-collector run --owner FDC --tables-file ./bootstrap.txt --push  # 한 �
 테이블은 describe·infer 도 하기 전에 걸러진다(`src/collect.mjs`). 파이프라인을
 중단된 지점부터 다시 시작한다는 개념의 별도 상태 파일은 없다: 처음부터 다시 돌려도
 결과가 같다.
+
+**`--refresh-facts` 는 기존 문서를 스킵 대신 팩트 갱신으로 처리한다** — describe 만
+다시 돌려 akg `PUT /api/docs/:type/:id/facts` 로 보낸다. 갱신 시맨틱은 전부 서버
+(`server/facts.mjs` `mergeFacts`) 소유다: 팩트는 통째로 교체, 살아있는 슬롯 값은
+보존, 사라진 컬럼의 슬롯은 scaffold→drop / 사람 작성분→deprecated. 이 경로에 LLM
+호출이 없는 건 구조다 — facts 경로로 온 슬롯 값은 서버가 전부 scaffold 로 리셋하므로
+(해석 주장은 propose 몫) 추론해 봐야 버려진다. 새 컬럼의 의미 채우기는 propose 경로가
+담당한다. 신규 문서와 달리 배치 엔드포인트가 없어 문서별 PUT(=문서별 1커밋)이다.
 
 ## 지금 구현된 것 (Phase 0~4, 전 단계 완료)
 
@@ -199,6 +211,7 @@ const { inference, attempts, error } = await inferTable(describe, { client });
   가짜 LLM 으로 40 테이블을 로컬 akg 서버에 실제로 올려, 커밋 1개·전량 비활성·주입
   인덱스 빈 상태·감사에 runId·재실행 시 전량 스킵·활성화하면 인덱스 등재까지
   확인했다. 남은 건 사내 akg 인스턴스라는 것뿐이다.
-- 재푸시는 여전히 **"이미 있으면 스킵"** 이다. 스키마가 바뀐 테이블의 팩트를 갱신하려면
-  akg 의 `PUT /api/docs/:type/:id/facts` 를 태워야 하는데, 그 갱신 시맨틱(언제 덮고
-  언제 두는가)은 아직 정하지 않았다.
+- 재푸시 기본은 여전히 **"이미 있으면 스킵"** 이고, 스키마가 바뀐 테이블은
+  `--refresh-facts` 로 팩트만 갱신한다(#10). 갱신 시맨틱은 서버 `mergeFacts` 가
+  정한다 — collector 는 describe 결과를 보낼 뿐, 언제 덮고 언제 두는가를 스스로
+  판단하지 않는다. 이 경로도 사내 실 akg 로는 아직 라이브 검증 전이다.

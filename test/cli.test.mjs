@@ -30,9 +30,13 @@ const COLUMN_ROWS = [
 function fakeDeps({ tables = ["T1"], existing = {} } = {}) {
   const logs = [];
   const createCalls = [];
+  const batchCalls = [];
+  const putFactsCalls = [];
   return {
     logs,
     createCalls,
+    batchCalls,
+    putFactsCalls,
     log: (line) => logs.push(line),
     fetchedAt: () => "2026-07-21T15:00:00Z",
     oracle: {
@@ -58,6 +62,14 @@ function fakeDeps({ tables = ["T1"], existing = {} } = {}) {
       async createDoc(type, doc) {
         createCalls.push(doc);
         return { alreadyExists: false, rev: "r1" };
+      },
+      async createDocs(type, docs) {
+        batchCalls.push(docs);
+        return { created: docs.map((d) => d.id), rev: "rb" };
+      },
+      async putFacts(type, id, doc) {
+        putFactsCalls.push({ id, doc });
+        return { created: false, rev: "rf", orphans: [] };
       },
     },
   };
@@ -117,7 +129,7 @@ test("push: --push 주면 실제로 생성한다", async () => {
 test("run: --owner 만 주면 discover 로 스키마 전체를 훑는다", async () => {
   const deps = fakeDeps({
     tables: ["T1", "T2"],
-    existing: { "testuser.t2": { id: "testuser.t2" } },
+    existing: { "t2": { id: "t2" } },
   });
   const out = await runCli(["run", "--owner", "TESTUSER"], deps);
 
@@ -127,13 +139,66 @@ test("run: --owner 만 주면 discover 로 스키마 전체를 훑는다", async
   assert.match(deps.logs.at(-1), /--push/);
 });
 
+test("run --refresh-facts: dry-run 은 기존 문서를 would_refresh 로 센다", async () => {
+  const deps = fakeDeps({
+    tables: ["T1", "T2"],
+    existing: { "t2": { id: "t2" } },
+  });
+  const out = await runCli(["run", "--owner", "TESTUSER", "--refresh-facts"], deps);
+
+  assert.deepEqual(
+    out.results.map((r) => r.action),
+    ["would_create", "would_refresh"],
+  );
+  assert.equal(deps.putFactsCalls.length, 0, "dry-run 은 PUT 을 안 보낸다");
+  assert.match(deps.logs.at(-1), /1개 팩트 갱신될 예정/);
+});
+
+test("run --refresh-facts --push: 신규는 배치, 기존은 문서별 putFacts", async () => {
+  const deps = fakeDeps({
+    tables: ["T1", "T2"],
+    existing: { "t2": { id: "t2" } },
+  });
+  const out = await runCli(
+    ["run", "--owner", "TESTUSER", "--refresh-facts", "--push"],
+    deps,
+  );
+
+  assert.deepEqual(
+    out.results.map((r) => r.action),
+    ["create", "refresh"],
+  );
+  assert.equal(deps.batchCalls.length, 1, "신규는 배치 1커밋");
+  assert.deepEqual(deps.batchCalls[0].map((d) => d.id), ["t1"]);
+  assert.deepEqual(
+    deps.putFactsCalls.map((c) => c.id),
+    ["t2"],
+    "기존 문서만 putFacts",
+  );
+  assert.match(deps.logs.join("\n"), /1개 팩트 갱신/);
+});
+
+test("run: --refresh-facts 없으면 기존처럼 스킵한다 — putFacts 를 안 부른다", async () => {
+  const deps = fakeDeps({
+    tables: ["T1", "T2"],
+    existing: { "t2": { id: "t2" } },
+  });
+  const out = await runCli(["run", "--owner", "TESTUSER", "--push"], deps);
+
+  assert.deepEqual(
+    out.results.map((r) => r.action),
+    ["create", "skip"],
+  );
+  assert.equal(deps.putFactsCalls.length, 0);
+});
+
 test("run: --tables 를 주면 discover 를 건너뛰고 그 테이블만 돈다", async () => {
   const deps = fakeDeps({ tables: ["T1", "T2", "T3"] }); // discover 가 불리면 3개가 나올 것
   const out = await runCli(["run", "--owner", "TESTUSER", "--tables", "T1, T2"], deps);
 
   assert.deepEqual(
     out.results.map((r) => r.id),
-    ["testuser.t1", "testuser.t2"],
+    ["t1", "t2"],
   );
 });
 
@@ -147,7 +212,7 @@ test("run: --tables-file 로 파일에서 테이블 목록을 읽는다 (# 주�
     const out = await runCli(["run", "--owner", "TESTUSER", "--tables-file", file], deps);
     assert.deepEqual(
       out.results.map((r) => r.id),
-      ["testuser.t1", "testuser.t2"],
+      ["t1", "t2"],
     );
   } finally {
     rmSync(dir, { recursive: true, force: true });

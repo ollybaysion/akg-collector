@@ -8,7 +8,7 @@
 // 재개(resume)는 여기 별도 상태가 없다: 스킵 정책 자체가 재개다. 전체 파이프라인을
 // 처음부터 다시 돌려도 이미 push 된 테이블은 그대로 스킵된다. 다만 그건 describe·
 // infer 까지 다시 하고 나서야 걸러진다는 뜻이라 — infer 호출(비용)까지 건너뛰려면
-// 호출자가 push 전에 docIdFor(owner, table) 로 미리 client.getDoc 을 불러 스킵
+// 호출자가 push 전에 docIdFor(table) 로 미리 client.getDoc 을 불러 스킵
 // 여부를 먼저 볼 수 있다(Phase 4 CLI 오케스트레이터가 이걸 wiring 한다).
 
 /**

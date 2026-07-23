@@ -137,6 +137,34 @@ export function createAkgClient({
         );
       throw new AkgApiError(`akg 배치 실패: HTTP ${status}`, { status, body });
     },
+
+    /**
+     * 기존 문서의 팩트만 교체한다 (akg #12 `PUT /api/docs/:type/:id/facts`).
+     *
+     * 슬롯 보존은 전적으로 서버(server/facts.mjs mergeFacts) 책임이다: 주소가
+     * 살아있는 슬롯은 값이 남고, 사라진 주소는 scaffold→drop / 사람 작성분→
+     * deprecated 로 접힌다. body 에 슬롯 값이 실려 있어도 서버가 전부 scaffold 로
+     * 리셋하므로 — 이 클라이언트는 compose 출력을 그대로 보내면 된다.
+     *
+     * @param {object} doc  composeDbSchemaDoc() 출력 (body 를 꺼내 보낸다)
+     * @returns {Promise<{created: boolean, rev: string,
+     *                     orphans: {address: string, outcome: string}[]}>}
+     *   created=true 는 문서가 없어서 새로 생겼다는 뜻(서버가 inactive 로 착지).
+     */
+    async putFacts(type, id, doc) {
+      const { status, body } = await call(
+        "PUT",
+        `/api/docs/${type}/${id}/facts`,
+        { body: doc.body },
+      );
+      if (status === 200 || status === 201)
+        return {
+          created: status === 201,
+          rev: body.rev,
+          orphans: body.orphans ?? [],
+        };
+      throw new AkgApiError(`akg facts PUT 실패: HTTP ${status}`, { status, body });
+    },
   };
 }
 

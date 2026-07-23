@@ -32,9 +32,13 @@ function requireField(obj, key, where) {
   return v;
 }
 
-/** akg 는 id 를 lower(owner.table) 로 강제한다 (src/envelope.mjs SEMANTIC_CHECKS). */
-export function docIdFor(owner, table) {
-  return `${owner}.${table}`.toLowerCase();
+/**
+ * akg 는 id 를 lower(table) 로 강제한다 — owner 는 body 의 순수 속성이고 id 를
+ * 한정하지 않는다 (akg src/envelope.mjs deriveId, 2026-07-22 변경. DB 가 하나라
+ * 테이블명만으로 충분하다는 결정).
+ */
+export function docIdFor(table) {
+  return table.toLowerCase();
 }
 
 /**
@@ -110,7 +114,7 @@ export function composeDbSchemaDoc(describe, inference, opts) {
 
   return {
     schema: "db-schema/v1",
-    id: docIdFor(owner, table),
+    id: docIdFor(table),
     keywords: [{ kw: table.toLowerCase(), inject: opts.inject ?? "pointer" }],
     // 비활성으로 착지한다(akg #8). 조회·미리보기는 되고 주입만 안 된다 — 주입
     // 예산이 턴당 문서 2개뿐이라, 뼈대 수백 개가 사람이 확정한 문서와 같은 2칸을

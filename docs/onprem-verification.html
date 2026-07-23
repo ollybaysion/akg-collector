@@ -303,7 +303,7 @@ npx akg-collector infer --owner &lt;스키마&gt; --table &lt;테이블&gt;</cod
 npx akg-collector push --owner &lt;스키마&gt; --table &lt;테이블&gt;</code></pre>
           <ul class="check-points">
             <li><code>would_create</code> 로 나오는지(그 테이블에 akg 문서가 이미 있으면 <code>skip</code> — 그럼 다른 테이블로)</li>
-            <li>id 가 <code>lower(owner.table)</code> 규칙대로 나오는지</li>
+            <li>id 가 <code>lower(table)</code> 규칙대로 나오는지(owner 는 body 속성일 뿐, id 를 한정하지 않는다)</li>
           </ul>
         </div>
       </div>
