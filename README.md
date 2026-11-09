@@ -1,7 +1,8 @@
 # akg-collector
 
 Oracle 스키마를 읽어 [agent-knowledge-governance](https://github.com/ollybaysion/agent-knowledge-governance)(akg)의
-`db-schema` 문서를 만드는 수집기.
+`db-schema` 문서를 만드는 수집기. `crawl` 하위 명령은 레포 md 같은 원천 글을 akg 수집 계약
+JSONL 로 낸다(아래 "crawl" 절).
 
 **팩트는 DB 에서, 의미는 LLM 에서, 확정은 사람이.** akg 의 3티어가 이 분업을 그대로 담는다.
 
@@ -85,6 +86,79 @@ npx akg-collector run --owner FDC --refresh-facts --push        # 기존 문서 
 (해석 주장은 propose 몫) 추론해 봐야 버려진다. 새 컬럼의 의미 채우기는 propose 경로가
 담당한다. 신규 문서와 달리 배치 엔드포인트가 없어 문서별 PUT(=문서별 1커밋)이다.
 
+## crawl — 원천 글을 JSONL 로
+
+원천(레포 폴더 · 사내 위키 · 사내 사이트 · VOC 티켓)마다 가져오는 법은 다르다. akg 가 받는
+모양은 하나다. 그래서 **크롤러 인터페이스 하나 + 공통 러너 하나 + 구현 여럿** 으로 나눈다.
+구현은 "목록을 얻는 법" 과 "글 하나를 md 로 가져오는 법" 만 안다. 러너가 검증 · 상한 ·
+출력 · 실패 셈을 한 곳에서 한다. 원천 접속 정보는 크롤러 옵션으로 받는다.
+
+```bash
+npx akg-collector crawl repo-fs --root ~/src/fdc-app --include 'docs/**/*.md' > fdc-app.jsonl
+npx akg-collector crawl repo-fs --root ~/src/fdc-app/docs --name fdc-app-docs   # include 기본값 **/*.md
+```
+
+`repo-fs` 옵션:
+
+| 옵션 | 뜻 |
+| --- | --- |
+| `--root <폴더>` | 필수. 읽을 폴더 |
+| `--include <글롭>` | root 기준 글롭. 여러 번 줄 수 있다. 기본값 `**/*.md`. 점으로 시작하는 폴더 · 파일과 `node_modules` 는 건너뛴다 |
+| `--name <이름>` | ref 앞 이름. 기본값은 root 폴더 이름. 폴더 이름이 원천을 가리지 못할 때(`docs` · 워크트리 이름) 준다 |
+
+`repo-fs` 의 칸:
+
+- `ref` = `<이름>@<root 기준 상대 경로>`
+- `title` = `#` 과 빈칸으로 시작하는 첫 줄. 없으면 확장자를 뺀 파일 이름
+- git 폴더: `createdAt` = 첫 커밋의 author 시각, `updatedAt` = 마지막 커밋의 author 시각
+- git 이 아닌 폴더 · 커밋 안 된 파일: `updatedAt` = 파일 mtime, `createdAt` 은 비운다
+
+### 출력
+
+stdout 에 한 줄 = 글 하나(akg 설계 §5.1). 마지막 줄은 완료 마커다.
+
+```jsonl
+{"ref":"fdc-app@docs/sensor-guide.md","title":"센서 가이드","mime":"text/markdown","text":"# 센서 가이드\n…","updatedAt":"2026-03-04T05:06:07.000Z","createdAt":"2026-01-02T03:04:05.000Z"}
+{"done":{"listed":3,"emitted":1,"oversize":["fdc-app@docs/huge.md"],"failed":["fdc-app@docs/locked.md"],"duplicate":[]}}
+```
+
+- 글 줄의 키는 `ref` · `title` · `mime` · `text` · `updatedAt` · `createdAt` · `keywords` · `sourceUrl` 뿐이다.
+  `mime` 은 늘 `text/markdown` 이다(CS4). 시각은 UTC ISO 8601 로 맞춘다.
+- `ref` · `title` · `keywords` 의 제어문자를 지우고 길이를 자른다(ref 512 · title 200 · 키워드 64 글자, CS12).
+- `text` 가 256 KB(UTF-8)를 넘는 글은 글 줄 대신 `oversize` 에 싣는다(CS5).
+- 같은 ref 가 또 나오면 뒤 것을 `duplicate` 에 싣는다.
+- fetch 가 실패한 글은 `failed` 에 싣고 stderr 에 까닭을 쓴다. 나머지 글은 그대로 나간다. exit 0.
+- 마커의 `listed` = `emitted` + `oversize` + `failed` + `duplicate` 수다.
+
+exit 코드:
+
+| 코드 | 뜻 |
+| --- | --- |
+| 0 | 마커까지 냈다. list 가 원천 전부를 냈다 |
+| 1 | list 가 중간에 실패했다. 마커가 없다 — 받는 쪽은 이 출력으로 고아를 판정하지 않는다(CS2) |
+| 2 | 사용법 오류(모르는 크롤러 이름 · 빠진 옵션) |
+
+### 구현 더하는 법
+
+1. `src/crawl/<이름>.mjs` 에 `argv → 크롤러` 함수를 둔다. 크롤러는 아래 셋을 가진다.
+
+   ```js
+   // name: string                              레지스트리 이름
+   // list(): AsyncIterable<CrawlRef>           지금 원천에 있는 글 전부. 본문 없이
+   // fetch(ref: CrawlRef): Promise<CrawlItem>  글 하나의 본문(md)
+   // CrawlRef  = { ref, title, sourceUrl?, updatedAt?, createdAt? }
+   // CrawlItem = CrawlRef & { text, keywords? }
+   ```
+
+   - `list` 는 원천 전부를 빠짐없이 낸다. 받는 쪽이 이 목록으로 고아를 판정한다.
+     끝까지 못 돌면 던진다.
+   - `ref` 는 원천 안에서 바뀌지 않는 값으로 짓는다(위키라면 페이지 ID). 같은 원천을 두 번
+     돌리면 같은 ref 가 나와야 한다.
+   - `fetch` 는 글 하나만 책임진다. 실패하면 던진다 — 러너가 `failed` 에 싣고 다음 글로 간다.
+   - 인증 · 페이지 넘김 · HTML → md 변환은 구현이 한다.
+2. `src/crawl/registry.mjs` 의 `CRAWLERS` 에 `"<이름>": <함수>` 한 줄을 더한다.
+3. 테스트는 `test/crawl-repo-fs.test.mjs` 꼴로 둔다. 러너 규칙은 `test/crawl-runner.test.mjs` 가 지킨다.
+
 ## 지금 구현된 것 (Phase 0~4, 전 단계 완료)
 
 테스트는 fixture 와 주입된 가짜 fetch·DB 커넥션만으로 전부 돈다 — 네트워크를 타지
@@ -104,9 +178,13 @@ npx akg-collector run --owner FDC --refresh-facts --push        # 기존 문서 
 - `src/collect.mjs` — 테이블 하나 end-to-end (존재확인 → describe → infer → compose → push)
 - `src/cli.mjs` — 다섯 커맨드 오케스트레이션, 실 클라이언트는 주입받는다
 - `bin/akg-collector.mjs` — CLI 진입점, 커맨드별로 필요한 접속 정보만 요구
+- `src/crawl/runner.mjs` — crawl 러너: list → fetch, 검증 · 상한 · JSONL · 완료 마커
+- `src/crawl/registry.mjs` — 크롤러 이름 → 만드는 함수
+- `src/crawl/repo-fs.mjs` — `repo-fs` 크롤러(폴더 + 글롭 + git 시각)
+- `src/crawl/cli.mjs` — `crawl <이름>` 하위 명령, exit 코드
 
 ```bash
-npm test    # 80 단언
+npm test    # 105 테스트
 ```
 
 `oracledb` 는 `package.json` 의존성으로만 선언돼 있다. `run(sql, binds)` 을 실제로

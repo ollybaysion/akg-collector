@@ -11,6 +11,8 @@
 // --owner 도 안 준 채 그냥 실행해도 usage 대신 모듈 못 찾는 스택트레이스가 떴을 것).
 // 그래서 커맨드 자체가 잘못됐거나 환경변수가 비어 있으면 드라이버를 건드리기 전에
 // 먼저 걸러진다.
+//
+// crawl 은 원천만 읽는다. 그래서 buildDeps 앞에서 src/crawl/cli.mjs 로 보낸다.
 
 import { runCli, CliError, COMMANDS } from "../src/cli.mjs";
 
@@ -61,10 +63,25 @@ async function buildDeps(command) {
   return deps;
 }
 
+function writeStdout(line) {
+  return new Promise((done) => {
+    if (process.stdout.write(`${line}\n`)) done();
+    else process.stdout.once("drain", done);
+  });
+}
+
 async function main() {
   const [command] = process.argv.slice(2);
+  if (command === "crawl") {
+    const { runCrawlCli } = await import("../src/crawl/cli.mjs");
+    process.exitCode = await runCrawlCli(process.argv.slice(3), {
+      write: writeStdout,
+      warn: (msg) => console.error(msg),
+    });
+    return;
+  }
   if (!COMMANDS.includes(command)) {
-    console.error(`사용법: akg-collector <${COMMANDS.join("|")}> [옵션]`);
+    console.error(`사용법: akg-collector <${[...COMMANDS, "crawl"].join("|")}> [옵션]`);
     process.exitCode = 1;
     return;
   }
